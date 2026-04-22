@@ -1,26 +1,27 @@
 """Parse ECU parameter .XLS files into structured dicts."""
 
-import xlrd
+from openpyxl import load_workbook
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any
 
 
 def parse_file(filepath: str) -> Dict[str, Any]:
-    """Load and parse a single XLS file.
+    """Load and parse a single XLS/XLSX file.
 
     Returns dict with 'label' and 'sheets' (containing Parameter, Val_2D, Val_3D).
     """
-    wb = xlrd.open_workbook(filepath)
+    wb = load_workbook(filepath, data_only=True)
 
     label = Path(filepath).stem
     sheets = {}
 
-    for sheet in wb.sheets():
-        if sheet.name == "Parameter":
+    for sheet_name in wb.sheetnames:
+        sheet = wb[sheet_name]
+        if sheet_name == "Parameter":
             sheets["Parameter"] = parse_parameter(sheet)
-        elif sheet.name == "Val_2D":
+        elif sheet_name == "Val_2D":
             sheets["Val_2D"] = parse_val_2d(sheet)
-        elif sheet.name == "Val_3D":
+        elif sheet_name == "Val_3D":
             sheets["Val_3D"] = parse_val_3d(sheet)
 
     return {"label": label, "sheets": sheets}
@@ -30,22 +31,23 @@ def parse_parameter(sheet) -> Dict[str, Dict[str, Any]]:
     """Parse Parameter sheet: Nr -> {name, value, unit}."""
     result = {}
 
-    for row_idx in range(1, sheet.nrows):
+    for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True)):
         try:
-            nr = sheet.cell_value(row_idx, 0)
+            nr = row[0]
             if not nr:
                 continue
 
-            name = sheet.cell_value(row_idx, 1)
-            value = sheet.cell_value(row_idx, 2)
-            unit = sheet.cell_value(row_idx, 3)
+            name = row[1] if len(row) > 1 else ""
+            value = row[2] if len(row) > 2 else None
+            unit = row[3] if len(row) > 3 else ""
 
             try:
                 value = float(value) if value else None
             except (ValueError, TypeError):
                 value = None
 
-            result[str(int(nr) if isinstance(nr, float) else nr)] = {
+            nr_key = str(int(nr) if isinstance(nr, float) else nr)
+            result[nr_key] = {
                 "name": str(name) if name else "",
                 "value": value,
                 "unit": str(unit) if unit else "",
@@ -57,36 +59,35 @@ def parse_parameter(sheet) -> Dict[str, Dict[str, Any]]:
 
 
 def parse_val_2d(sheet) -> Dict[str, Dict[str, Any]]:
-    """Parse Val_2D sheet. Each curve = 4 rows: [id, x-axis, y-axis, blank].
-
-    Returns: Nr -> {name, x_values, y_values}
-    """
+    """Parse Val_2D sheet. Each curve = 4 rows: [id, x-axis, y-axis, blank]."""
     result = {}
-    row_idx = 1
 
-    while row_idx < sheet.nrows:
+    rows = list(sheet.iter_rows(min_row=2, values_only=True))
+    row_idx = 0
+
+    while row_idx < len(rows):
         try:
-            nr = sheet.cell_value(row_idx, 0)
+            nr = rows[row_idx][0]
             if not nr:
                 row_idx += 1
                 continue
 
-            name = sheet.cell_value(row_idx, 1)
+            name = rows[row_idx][1] if len(rows[row_idx]) > 1 else ""
             nr_key = str(int(nr) if isinstance(nr, float) else nr)
 
-            if row_idx + 2 >= sheet.nrows:
+            if row_idx + 2 >= len(rows):
                 row_idx += 4
                 continue
 
-            x_row = row_idx + 1
-            y_row = row_idx + 2
+            x_row = rows[row_idx + 1]
+            y_row = rows[row_idx + 2]
 
             x_values = []
             y_values = []
 
-            for col in range(2, sheet.ncols):
-                x_val = sheet.cell_value(x_row, col)
-                y_val = sheet.cell_value(y_row, col)
+            for col in range(2, len(x_row)):
+                x_val = x_row[col]
+                y_val = y_row[col]
 
                 try:
                     x_values.append(float(x_val) if x_val else 0)
@@ -108,33 +109,32 @@ def parse_val_2d(sheet) -> Dict[str, Dict[str, Any]]:
 
 
 def parse_val_3d(sheet) -> Dict[str, Dict[str, Any]]:
-    """Parse Val_3D sheet. Structure: identifier row has Nr, Name, then x-axis starting at col E.
-    Data rows: col D has y-axis, cols E+ have grid values.
-    """
+    """Parse Val_3D sheet. Each map = variable rows: [id+x, data rows..., blank]."""
     result = {}
-    row_idx = 1
 
-    while row_idx < sheet.nrows:
+    rows = list(sheet.iter_rows(min_row=2, values_only=True))
+    row_idx = 0
+
+    while row_idx < len(rows):
         try:
-            nr = sheet.cell_value(row_idx, 0)
+            nr = rows[row_idx][0]
             if not nr or nr == "":
                 row_idx += 1
                 continue
 
             # Skip rows without a numeric Nr (floating point number)
-            if not isinstance(nr, float):
+            if not isinstance(nr, (int, float)):
                 row_idx += 1
                 continue
 
-            name = sheet.cell_value(row_idx, 1)
+            name = rows[row_idx][1] if len(rows[row_idx]) > 1 else ""
             nr_key = str(int(nr))
 
-            # First pass: get x-axis values from identifier row (col F onward, index 5+)
+            # X-axis values start at column F (index 5) of the identifier row
             x_values = []
-            for col in range(5, sheet.ncols):
-                x_val = sheet.cell_value(row_idx, col)
-                # Stop on empty string (not when value is 0)
-                if x_val == "":
+            for col in range(5, len(rows[row_idx])):
+                x_val = rows[row_idx][col]
+                if not x_val or x_val == "":
                     break
                 try:
                     x_values.append(float(x_val))
@@ -146,16 +146,16 @@ def parse_val_3d(sheet) -> Dict[str, Dict[str, Any]]:
             data_row = row_idx + 1
 
             # Parse data rows until we hit a separator
-            while data_row < sheet.nrows:
+            while data_row < len(rows):
                 # Column E (index 4) contains y-axis breakpoints in data rows
-                y_val = sheet.cell_value(data_row, 4)
-                col_c = sheet.cell_value(data_row, 2)
+                y_val = rows[data_row][4] if len(rows[data_row]) > 4 else None
+                col_c = rows[data_row][2] if len(rows[data_row]) > 2 else None
 
                 # Empty row = separator between maps
                 if (not y_val or y_val == "") and (not col_c or col_c == ""):
                     break
 
-                # Skip "rpm" header row (col C = "rpm", index 2)
+                # Skip "rpm" header row
                 if isinstance(col_c, str) and col_c.lower() == "rpm":
                     data_row += 1
                     continue
@@ -176,9 +176,9 @@ def parse_val_3d(sheet) -> Dict[str, Dict[str, Any]]:
                 # Grid values start at column F (index 5) matching x-axis column positions
                 row_values = []
                 for col in range(5, 5 + len(x_values)):
-                    if col >= sheet.ncols:
+                    if col >= len(rows[data_row]):
                         break
-                    cell_val = sheet.cell_value(data_row, col)
+                    cell_val = rows[data_row][col]
                     try:
                         row_values.append(float(cell_val) if cell_val != "" else 0)
                     except (ValueError, TypeError):
