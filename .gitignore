@@ -35,3 +35,12 @@ ENV/
 .DS_Store
 .env
 .env.local
+
+# Streamlit
+.streamlit/secrets.toml
+.streamlit/cache/
+.streamlit/*.cache
+
+# Temp files
+*.tmp
+.pytest_cache/
