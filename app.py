@@ -5,7 +5,7 @@ import pandas as pd
 import tempfile
 from pathlib import Path
 from parser import parse_file
-from comparator import compare_all_pairs
+from multi_file_comparator import compare_all_files
 
 
 st.set_page_config(page_title="ECU Comparator", layout="wide")
@@ -43,50 +43,43 @@ if run_button and uploaded_files and len(uploaded_files) >= 2:
                     file_label = Path(uploaded_file.name).stem
                     files_data[file_label] = parse_file(str(temp_path))
 
-                diffs = compare_all_pairs(files_data)
+                diffs = compare_all_files(files_data)
 
                 if diffs:
                     df = pd.DataFrame(diffs)
 
-                    st.success(f"✓ Found **{len(diffs)}** differences across **{len(uploaded_files)}** files")
+                    st.success(f"✓ Found **{len(diffs)}** difference locations across **{len(uploaded_files)}** files")
 
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        sheet_filter = st.multiselect(
-                            "Filter by Sheet",
-                            ["Parameter", "Val_2D", "Val_3D"],
-                            default=["Parameter", "Val_2D", "Val_3D"],
-                        )
+                    # Filter by sheet
+                    sheet_filter = st.multiselect(
+                        "Filter by Sheet",
+                        ["Parameter", "Val_2D", "Val_3D"],
+                        default=["Parameter", "Val_2D", "Val_3D"],
+                    )
 
-                    with col2:
-                        file_pairs = df.apply(lambda x: f"{x['File A']} ↔ {x['File B']}", axis=1).unique()
-                        pair_filter = st.multiselect(
-                            "Filter by File Pair",
-                            file_pairs,
-                            default=list(file_pairs)[:5],
-                        )
+                    filtered_df = df[df["Sheet"].isin(sheet_filter)].copy()
 
-                    filtered_df = df[
-                        (df["Sheet"].isin(sheet_filter)) &
-                        (df.apply(lambda x: f"{x['File A']} ↔ {x['File B']}", axis=1).isin(pair_filter))
-                    ]
+                    st.subheader(f"Differences ({len(filtered_df)} locations)")
 
-                    st.subheader(f"Differences ({len(filtered_df)} rows)")
+                    # Get file columns (all except Sheet, Nr, Name, Location)
+                    file_cols = [col for col in filtered_df.columns if col not in ["Sheet", "Nr", "Name", "Location"]]
+
+                    # Build column config dynamically
+                    col_config = {
+                        "Sheet": st.column_config.TextColumn(width="small"),
+                        "Nr": st.column_config.TextColumn(width="small"),
+                        "Name": st.column_config.TextColumn(width="medium"),
+                        "Location": st.column_config.TextColumn(width="small"),
+                    }
+
+                    for file_col in file_cols:
+                        col_config[file_col] = st.column_config.NumberColumn(width="small", format="%.6g")
+
                     st.dataframe(
                         filtered_df,
                         use_container_width=True,
                         hide_index=True,
-                        column_config={
-                            "File A": st.column_config.TextColumn(width="small"),
-                            "File B": st.column_config.TextColumn(width="small"),
-                            "Sheet": st.column_config.TextColumn(width="small"),
-                            "Nr": st.column_config.TextColumn(width="small"),
-                            "Name": st.column_config.TextColumn(width="medium"),
-                            "Location": st.column_config.TextColumn(width="small"),
-                            "Value A": st.column_config.NumberColumn(width="small", format="%.6f"),
-                            "Value B": st.column_config.NumberColumn(width="small", format="%.6f"),
-                            "Delta": st.column_config.NumberColumn(width="small", format="%.6f"),
-                        }
+                        column_config=col_config
                     )
 
                     csv = filtered_df.to_csv(index=False)
