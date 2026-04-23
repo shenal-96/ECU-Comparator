@@ -1,56 +1,60 @@
 """Parse ECU parameter .XLS files into structured dicts."""
 
-from openpyxl import load_workbook
+import pandas as pd
 from pathlib import Path
 from typing import Dict, Any
 
 
 def parse_file(filepath: str) -> Dict[str, Any]:
-    """Load and parse a single XLS/XLSX file.
+    """Load and parse a single XLS/XLSX file using pandas.
 
     Returns dict with 'label' and 'sheets' (containing Parameter, Val_2D, Val_3D).
     """
-    wb = load_workbook(filepath, data_only=True)
-
     label = Path(filepath).stem
     sheets = {}
 
-    for sheet_name in wb.sheetnames:
-        sheet = wb[sheet_name]
+    try:
+        excel_file = pd.ExcelFile(filepath)
+    except Exception as e:
+        raise ValueError(f"Could not read file {filepath}: {str(e)}")
+
+    for sheet_name in excel_file.sheet_names:
         if sheet_name == "Parameter":
-            sheets["Parameter"] = parse_parameter(sheet)
+            sheets["Parameter"] = parse_parameter(filepath, sheet_name)
         elif sheet_name == "Val_2D":
-            sheets["Val_2D"] = parse_val_2d(sheet)
+            sheets["Val_2D"] = parse_val_2d(filepath, sheet_name)
         elif sheet_name == "Val_3D":
-            sheets["Val_3D"] = parse_val_3d(sheet)
+            sheets["Val_3D"] = parse_val_3d(filepath, sheet_name)
 
     return {"label": label, "sheets": sheets}
 
 
-def parse_parameter(sheet) -> Dict[str, Dict[str, Any]]:
+def parse_parameter(filepath: str, sheet_name: str) -> Dict[str, Dict[str, Any]]:
     """Parse Parameter sheet: Nr -> {name, value, unit}."""
+    df = pd.read_excel(filepath, sheet_name=sheet_name, header=None)
+
     result = {}
 
-    for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True)):
+    for idx, row in df.iterrows():
         try:
-            nr = row[0]
-            if not nr:
+            nr = row.iloc[0]
+            if pd.isna(nr):
                 continue
 
-            name = row[1] if len(row) > 1 else ""
-            value = row[2] if len(row) > 2 else None
-            unit = row[3] if len(row) > 3 else ""
+            name = row.iloc[1] if len(row) > 1 else ""
+            value = row.iloc[2] if len(row) > 2 else None
+            unit = row.iloc[3] if len(row) > 3 else ""
 
             try:
-                value = float(value) if value else None
+                value = float(value) if pd.notna(value) else None
             except (ValueError, TypeError):
                 value = None
 
             nr_key = str(int(nr) if isinstance(nr, float) else nr)
             result[nr_key] = {
-                "name": str(name) if name else "",
+                "name": str(name) if pd.notna(name) else "",
                 "value": value,
-                "unit": str(unit) if unit else "",
+                "unit": str(unit) if pd.notna(unit) else "",
             }
         except Exception:
             continue
@@ -58,17 +62,18 @@ def parse_parameter(sheet) -> Dict[str, Dict[str, Any]]:
     return result
 
 
-def parse_val_2d(sheet) -> Dict[str, Dict[str, Any]]:
+def parse_val_2d(filepath: str, sheet_name: str) -> Dict[str, Dict[str, Any]]:
     """Parse Val_2D sheet. Each curve = 4 rows: [id, x-axis, y-axis, blank]."""
-    result = {}
+    df = pd.read_excel(filepath, sheet_name=sheet_name, header=None)
+    rows = df.values.tolist()
 
-    rows = list(sheet.iter_rows(min_row=2, values_only=True))
+    result = {}
     row_idx = 0
 
     while row_idx < len(rows):
         try:
             nr = rows[row_idx][0]
-            if not nr:
+            if pd.isna(nr):
                 row_idx += 1
                 continue
 
@@ -90,13 +95,13 @@ def parse_val_2d(sheet) -> Dict[str, Dict[str, Any]]:
                 y_val = y_row[col]
 
                 try:
-                    x_values.append(float(x_val) if x_val else 0)
-                    y_values.append(float(y_val) if y_val else 0)
+                    x_values.append(float(x_val) if pd.notna(x_val) else 0)
+                    y_values.append(float(y_val) if pd.notna(y_val) else 0)
                 except (ValueError, TypeError):
                     pass
 
             result[nr_key] = {
-                "name": str(name) if name else "",
+                "name": str(name) if pd.notna(name) else "",
                 "x_values": x_values,
                 "y_values": y_values,
             }
@@ -108,17 +113,18 @@ def parse_val_2d(sheet) -> Dict[str, Dict[str, Any]]:
     return result
 
 
-def parse_val_3d(sheet) -> Dict[str, Dict[str, Any]]:
+def parse_val_3d(filepath: str, sheet_name: str) -> Dict[str, Dict[str, Any]]:
     """Parse Val_3D sheet. Each map = variable rows: [id+x, data rows..., blank]."""
-    result = {}
+    df = pd.read_excel(filepath, sheet_name=sheet_name, header=None)
+    rows = df.values.tolist()
 
-    rows = list(sheet.iter_rows(min_row=2, values_only=True))
+    result = {}
     row_idx = 0
 
     while row_idx < len(rows):
         try:
             nr = rows[row_idx][0]
-            if not nr or nr == "":
+            if pd.isna(nr):
                 row_idx += 1
                 continue
 
@@ -134,7 +140,7 @@ def parse_val_3d(sheet) -> Dict[str, Dict[str, Any]]:
             x_values = []
             for col in range(5, len(rows[row_idx])):
                 x_val = rows[row_idx][col]
-                if not x_val or x_val == "":
+                if pd.isna(x_val) or x_val == "":
                     break
                 try:
                     x_values.append(float(x_val))
@@ -152,7 +158,7 @@ def parse_val_3d(sheet) -> Dict[str, Dict[str, Any]]:
                 col_c = rows[data_row][2] if len(rows[data_row]) > 2 else None
 
                 # Empty row = separator between maps
-                if (not y_val or y_val == "") and (not col_c or col_c == ""):
+                if (pd.isna(y_val) or y_val == "") and (pd.isna(col_c) or col_c == ""):
                     break
 
                 # Skip "rpm" header row
@@ -161,13 +167,13 @@ def parse_val_3d(sheet) -> Dict[str, Dict[str, Any]]:
                     continue
 
                 # Parse y-axis value (must be numeric)
-                try:
-                    y_num = float(y_val) if y_val else None
-                except (ValueError, TypeError):
+                if pd.isna(y_val):
                     data_row += 1
                     continue
 
-                if y_num is None:
+                try:
+                    y_num = float(y_val)
+                except (ValueError, TypeError):
                     data_row += 1
                     continue
 
@@ -180,7 +186,7 @@ def parse_val_3d(sheet) -> Dict[str, Dict[str, Any]]:
                         break
                     cell_val = rows[data_row][col]
                     try:
-                        row_values.append(float(cell_val) if cell_val != "" else 0)
+                        row_values.append(float(cell_val) if pd.notna(cell_val) and cell_val != "" else 0)
                     except (ValueError, TypeError):
                         row_values.append(0)
 
@@ -190,7 +196,7 @@ def parse_val_3d(sheet) -> Dict[str, Dict[str, Any]]:
                 data_row += 1
 
             result[nr_key] = {
-                "name": str(name) if name else "",
+                "name": str(name) if pd.notna(name) else "",
                 "x_values": x_values,
                 "y_values": y_values,
                 "grid": grid,
