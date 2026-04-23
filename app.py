@@ -1,4 +1,4 @@
-"""Streamlit app for comparing ECU parameter files (XLS/CSV)."""
+"""Streamlit app for comparing ECU parameter files (XLS/XLSX/CSV)."""
 
 import streamlit as st
 import pandas as pd
@@ -13,20 +13,30 @@ from csv_comparator import compare_csv_files
 st.set_page_config(page_title="ECU Comparator", layout="wide")
 st.title("ECU Parameter File Comparator")
 
-# Separate file uploaders for XLS and CSV
-col1, col2 = st.columns(2)
+# Separate file uploaders for XLS, XLSX, and CSV
+col1, col2, col3 = st.columns(3)
 
 with col1:
     st.subheader("XLS Files")
     xls_files = st.file_uploader(
-        "Select .XLS/.XLSX files",
-        type=["xls", "xlsx"],
+        "Select .XLS files",
+        type=["xls"],
         accept_multiple_files=True,
         key="xls_uploader",
-        help="Upload ECU parameter .XLS files"
+        help="Upload ECU parameter .XLS files (old format)"
     )
 
 with col2:
+    st.subheader("XLSX Files")
+    xlsx_files = st.file_uploader(
+        "Select .XLSX files",
+        type=["xlsx"],
+        accept_multiple_files=True,
+        key="xlsx_uploader",
+        help="Upload ECU parameter .XLSX files (modern format)"
+    )
+
+with col3:
     st.subheader("CSV Files")
     csv_files = st.file_uploader(
         "Select .CSV files",
@@ -39,17 +49,17 @@ with col2:
 st.divider()
 
 # Create tabs for each comparison type
-tab1, tab2 = st.tabs(["XLS Comparison", "CSV Comparison"])
+tab1, tab2, tab3 = st.tabs(["XLS Comparison", "XLSX Comparison", "CSV Comparison"])
 
-# XLS COMPARISON TAB
-with tab1:
-    if xls_files and len(xls_files) >= 2:
-        if st.button("Run XLS Comparison", key="xls_run", type="primary", use_container_width=True):
-            with st.spinner("Loading and comparing XLS files..."):
+# Helper function for XLS/XLSX comparison
+def compare_xls_or_xlsx_files(files_list, tab_name, download_name):
+    if files_list and len(files_list) >= 2:
+        if st.button(f"Run {tab_name} Comparison", key=f"{tab_name.lower()}_run", type="primary", use_container_width=True):
+            with st.spinner(f"Loading and comparing {tab_name} files..."):
                 try:
                     files_data = {}
                     with tempfile.TemporaryDirectory() as tmpdir:
-                        for uploaded_file in xls_files:
+                        for uploaded_file in files_list:
                             temp_path = Path(tmpdir) / uploaded_file.name
                             with open(temp_path, "wb") as f:
                                 f.write(uploaded_file.getbuffer())
@@ -62,14 +72,14 @@ with tab1:
                         if diffs:
                             df = pd.DataFrame(diffs)
 
-                            st.success(f"✓ Found **{len(df)}** difference locations across **{len(xls_files)}** files")
+                            st.success(f"✓ Found **{len(df)}** difference locations across **{len(files_list)}** files")
 
                             # Filter by sheet
                             sheet_filter = st.multiselect(
                                 "Filter by Sheet",
                                 ["Parameter", "Val_2D", "Val_3D"],
                                 default=["Parameter", "Val_2D", "Val_3D"],
-                                key="xls_sheet_filter"
+                                key=f"{tab_name.lower()}_sheet_filter"
                             )
 
                             filtered_df = df[df["Sheet"].isin(sheet_filter)].copy()
@@ -101,21 +111,30 @@ with tab1:
                             st.download_button(
                                 label="📥 Download as CSV",
                                 data=csv,
-                                file_name="xls_differences.csv",
+                                file_name=f"{download_name}_differences.csv",
                                 mime="text/csv",
-                                key="xls_download"
+                                key=f"{tab_name.lower()}_download"
                             )
 
                         else:
                             st.info("No differences found! All files are identical.")
 
                 except Exception as e:
-                    st.error(f"Error during XLS comparison: {str(e)}")
+                    st.error(f"Error during {tab_name} comparison: {str(e)}")
     else:
-        st.info("👈 Upload at least 2 XLS files to compare")
+        st.info(f"👈 Upload at least 2 {tab_name} files to compare")
+
+
+# XLS COMPARISON TAB
+with tab1:
+    compare_xls_or_xlsx_files(xls_files, "XLS", "xls")
+
+# XLSX COMPARISON TAB
+with tab2:
+    compare_xls_or_xlsx_files(xlsx_files, "XLSX", "xlsx")
 
 # CSV COMPARISON TAB
-with tab2:
+with tab3:
     if csv_files and len(csv_files) >= 2:
         if st.button("Run CSV Comparison", key="csv_run", type="primary", use_container_width=True):
             with st.spinner("Loading and comparing CSV files..."):
